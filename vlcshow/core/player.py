@@ -8,8 +8,47 @@ Polling strategy: a QTimer fires every 250 ms and emits position / time
 using VLC's own event callbacks.
 """
 
+import os
 import sys
 from typing import Optional
+
+
+def _register_vlc_dll_path() -> None:
+    """Work around the Python 3.8+ Windows DLL-loading change.
+
+    Since Python 3.8, ctypes no longer searches PATH for DLLs.  We must
+    explicitly call os.add_dll_directory() with VLC's installation folder
+    so that libvlc.dll (and its dependencies) can be found.
+    """
+    if sys.platform != "win32":
+        return
+
+    # Check env var first so the user can override if VLC is in an odd place
+    env_path = os.environ.get("PYTHON_VLC_MODULE_PATH", "")
+    candidates = [
+        env_path,
+        r"C:\Program Files\VideoLAN\VLC",
+        r"C:\Program Files (x86)\VideoLAN\VLC",
+    ]
+
+    for path in candidates:
+        if path and os.path.isfile(os.path.join(path, "libvlc.dll")):
+            # Prepend to PATH for any indirect LoadLibrary calls inside VLC
+            os.environ["PATH"] = path + os.pathsep + os.environ.get("PATH", "")
+            # Required on Python 3.8+ for ctypes.CDLL to resolve the DLL
+            os.add_dll_directory(path)
+            return
+
+    # VLC not found in standard locations — let python-vlc raise its own error
+    # with a clearer message than a raw FileNotFoundError.
+    raise FileNotFoundError(
+        "libvlc.dll not found.  Install VLC from https://www.videolan.org "
+        "or set the PYTHON_VLC_MODULE_PATH environment variable to the folder "
+        "containing libvlc.dll."
+    )
+
+
+_register_vlc_dll_path()
 
 import vlc
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
