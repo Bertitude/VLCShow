@@ -21,7 +21,6 @@ APP_STYLESHEET = """
     font-family: "Segoe UI", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
     font-size: 14px;
     outline: none;
-    box-sizing: border-box;
 }
 
 QMainWindow,
