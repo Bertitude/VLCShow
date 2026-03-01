@@ -198,8 +198,21 @@ QLabel {
    File dialog (inherits theme automatically via QPalette)
 ═══════════════════════════════════════════════════════════ */
 
-QFileDialog {
+/* Non-native QFileDialog: override the px-based font from the * rule.
+   Qt's px→pt conversion can produce -1pt on some DPI configs, causing
+   "QFont::setPointSize: Point size <= 0 (-1)" warnings.  Using pt here
+   guarantees a valid size for every widget inside the dialog. */
+QFileDialog,
+QFileDialog QWidget,
+QFileDialog QAbstractItemView,
+QFileDialog QLineEdit,
+QFileDialog QLabel,
+QFileDialog QPushButton,
+QFileDialog QComboBox,
+QFileDialog QToolButton {
     background: #161b22;
+    color: #e6edf3;
+    font-size: 10pt;
 }
 
 """
