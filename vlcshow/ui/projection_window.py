@@ -1,23 +1,27 @@
-"""ProjectionWindow — fullscreen output window for a secondary display.
+"""ProjectionWindow — fullscreen output window on a specific display.
 
-Phase 2 — NOT YET IMPLEMENTED.
+One instance per active output channel.  It holds a VideoWidget whose
+native handle is given to the channel's VLCPlayer, so VLC renders
+directly into it on the target monitor.
 
-This module will provide a borderless fullscreen QWindow that:
-  • Is positioned on a specific QScreen (projector / secondary monitor).
-  • Hosts a VideoWidget whose native handle is given to a VLCPlayer instance.
-  • Accepts signals from MainWindow to show/hide, toggle fullscreen, and
-    route a loaded media file to the correct player instance.
+Fullscreen flow
+───────────────
+1.  show_on_screen()   – open as a normal window on the target display
+2.  go_fullscreen()    – move & resize to fill the target screen
+3.  exit_fullscreen()  – return to windowed mode
+4.  toggle_fullscreen() – flip between the two
 
-Placeholder class is defined so imports don't fail during Phase 1.
+Pressing Escape while fullscreen also calls exit_fullscreen().
 """
 
 from __future__ import annotations
 
 from typing import Optional, TYPE_CHECKING
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QScreen
+
+from vlcshow.ui.video_widget import VideoWidget
 
 if TYPE_CHECKING:
     from vlcshow.core.player import VLCPlayer
@@ -25,15 +29,7 @@ if TYPE_CHECKING:
 
 
 class ProjectionWindow(QWidget):
-    """Fullscreen output window targeted at a specific display.
-
-    Instantiate one per output channel (secondary screen / projector).
-
-    Args:
-        screen_info:  The target display.
-        player:       The VLCPlayer instance whose output will be routed here.
-        parent:       Optional Qt parent.
-    """
+    """Borderless output window that renders on a specific display."""
 
     def __init__(
         self,
@@ -41,31 +37,91 @@ class ProjectionWindow(QWidget):
         player: "VLCPlayer",
         parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(parent)
+        # Window flag: top-level window without a taskbar entry
+        super().__init__(parent, Qt.WindowType.Window)
         self._screen_info = screen_info
         self._player = player
+        self._is_fullscreen = False
+        self._player_attached = False
 
-        # Phase 2 TODO: move window to target screen and embed VideoWidget
-        self.setWindowTitle(f"VLCShow — {screen_info.short_label}")
-        self.setStyleSheet("background: #000;")
+        self.setWindowTitle(screen_info.short_label)
+        self.setStyleSheet("background: #000000;")
 
         layout = QVBoxLayout(self)
-        placeholder = QLabel(
-            f"[Phase 2] Projection output\n{screen_info.short_label}"
-        )
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet("color: #30363d; font-size: 16px;")
-        layout.addWidget(placeholder)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._video = VideoWidget()
+        self._video.set_media_active(True)   # hide "no media" placeholder
+        layout.addWidget(self._video)
+
+    # ────────────────────────────────────────────────────────── public API
+
+    def show_on_screen(self) -> None:
+        """Open as a standard window positioned on the target display."""
+        self._is_fullscreen = False
+        geo = self._screen_info.geometry
+        # Offset slightly from top-left so it's clearly a separate window
+        self.setGeometry(geo.x() + 40, geo.y() + 40, 960, 540)
+        self.show()
+        self._attach_player()
 
     def go_fullscreen(self) -> None:
-        """Move to target screen and enter fullscreen mode."""
-        # Phase 2 implementation:
-        #   screen = QApplication.screens()[self._screen_info.index]
-        #   self.windowHandle().setScreen(screen)
-        #   self.setGeometry(screen.geometry())
-        #   self.showFullScreen()
-        raise NotImplementedError("Phase 2")
+        """Fill the target display with borderless fullscreen."""
+        app = QApplication.instance()
+        screens = app.screens()
+        idx = self._screen_info.index
+
+        # Ensure the native window handle exists
+        if not self.isVisible():
+            self.show()
+
+        # Move to the correct screen before entering fullscreen
+        if idx < len(screens):
+            handle = self.windowHandle()
+            if handle:
+                handle.setScreen(screens[idx])
+            self.setGeometry(screens[idx].geometry())
+
+        self.showFullScreen()
+        self._is_fullscreen = True
+        self._attach_player()
 
     def exit_fullscreen(self) -> None:
-        """Leave fullscreen and restore windowed mode."""
-        raise NotImplementedError("Phase 2")
+        """Leave fullscreen and restore a normal windowed view."""
+        geo = self._screen_info.geometry
+        self.showNormal()
+        self.setGeometry(geo.x() + 40, geo.y() + 40, 960, 540)
+        self._is_fullscreen = False
+
+    def toggle_fullscreen(self) -> None:
+        if self._is_fullscreen:
+            self.exit_fullscreen()
+        else:
+            self.go_fullscreen()
+
+    @property
+    def is_fullscreen(self) -> bool:
+        return self._is_fullscreen
+
+    # ─────────────────────────────────────────────────── snapshot (preview)
+
+    def take_snapshot(self, path: str) -> bool:
+        """Delegate to the player's snapshot API."""
+        return self._player.take_snapshot(path)
+
+    # ──────────────────────────────────────────────────────────── internals
+
+    def _attach_player(self) -> None:
+        """Attach the VLC player to the VideoWidget (safe to call repeatedly)."""
+        if not self._player_attached:
+            self._player.attach_to_widget(self._video)
+            self._player_attached = True
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self._is_fullscreen:
+            self.exit_fullscreen()
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:
+        self._player.stop()
+        event.accept()
