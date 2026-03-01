@@ -13,17 +13,44 @@ import sys
 from typing import Optional
 
 
+def _pe_machine(dll_path: str) -> Optional[int]:
+    """Read the COFF Machine field from a PE/DLL header without loading it.
+
+    Returns the raw machine code (e.g. 0x8664 = AMD64, 0x014C = i386),
+    or None if the file cannot be parsed.
+    """
+    try:
+        with open(dll_path, "rb") as f:
+            if f.read(2) != b"MZ":          # DOS magic
+                return None
+            f.seek(0x3C)
+            pe_offset = int.from_bytes(f.read(4), "little")
+            f.seek(pe_offset)
+            if f.read(4) != b"PE\x00\x00":  # PE signature
+                return None
+            return int.from_bytes(f.read(2), "little")  # COFF Machine
+    except Exception:
+        return None
+
+
 def _register_vlc_dll_path() -> None:
     """Work around the Python 3.8+ Windows DLL-loading change.
 
     Since Python 3.8, ctypes no longer searches PATH for DLLs.  We must
     explicitly call os.add_dll_directory() with VLC's installation folder
     so that libvlc.dll (and its dependencies) can be found.
+
+    Also detects architecture mismatches (32-bit VLC with 64-bit Python or
+    vice versa) by reading the PE header, and raises a clear error with
+    actionable instructions before ctypes can emit the cryptic WinError 193.
     """
     if sys.platform != "win32":
         return
 
-    # Check env var first so the user can override if VLC is in an odd place
+    import struct
+    is_64bit_python = struct.calcsize("P") == 8
+    python_arch = "64-bit" if is_64bit_python else "32-bit"
+
     env_path = os.environ.get("PYTHON_VLC_MODULE_PATH", "")
     candidates = [
         env_path,
@@ -32,19 +59,36 @@ def _register_vlc_dll_path() -> None:
     ]
 
     for path in candidates:
-        if path and os.path.isfile(os.path.join(path, "libvlc.dll")):
-            # Prepend to PATH for any indirect LoadLibrary calls inside VLC
-            os.environ["PATH"] = path + os.pathsep + os.environ.get("PATH", "")
-            # Required on Python 3.8+ for ctypes.CDLL to resolve the DLL
-            os.add_dll_directory(path)
-            return
+        dll = os.path.join(path, "libvlc.dll") if path else ""
+        if not (path and os.path.isfile(dll)):
+            continue
 
-    # VLC not found in standard locations — let python-vlc raise its own error
-    # with a clearer message than a raw FileNotFoundError.
+        # Check architecture before ctypes tries (and fails with WinError 193)
+        machine = _pe_machine(dll)
+        dll_is_64bit = {0x8664: True, 0x014C: False}.get(machine)  # type: ignore[arg-type]
+
+        if dll_is_64bit is not None and dll_is_64bit != is_64bit_python:
+            dll_arch = "64-bit" if dll_is_64bit else "32-bit"
+            need_arch = "64-bit" if is_64bit_python else "32-bit"
+            raise OSError(
+                f"\nArchitecture mismatch detected:\n"
+                f"  Python  : {python_arch}  ({sys.executable})\n"
+                f"  libvlc  : {dll_arch}  ({dll})\n\n"
+                f"Fix — choose one:\n"
+                f"  1. Install the {need_arch} VLC from https://www.videolan.org/vlc/\n"
+                f"  2. Install {dll_arch} Python from https://www.python.org/\n"
+                f"  3. Set PYTHON_VLC_MODULE_PATH to a {need_arch} VLC directory"
+            )
+
+        # Architecture matches — register with Python's DLL loader
+        os.environ["PATH"] = path + os.pathsep + os.environ.get("PATH", "")
+        os.add_dll_directory(path)
+        return
+
     raise FileNotFoundError(
-        "libvlc.dll not found.  Install VLC from https://www.videolan.org "
-        "or set the PYTHON_VLC_MODULE_PATH environment variable to the folder "
-        "containing libvlc.dll."
+        "libvlc.dll not found.\n"
+        "  • Install VLC from https://www.videolan.org/vlc/\n"
+        "  • Or set PYTHON_VLC_MODULE_PATH to the folder containing libvlc.dll"
     )
 
 
