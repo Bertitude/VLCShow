@@ -185,8 +185,11 @@ class MainWindow(QMainWindow):
     # ─────────────────────────────────────────────────── source player slots
 
     def _open_file(self) -> None:
+        # DontUseNativeDialog prevents the Windows Shell picker from
+        # hydrating OneDrive placeholder files simply by browsing folders.
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Video File", "", _VIDEO_FILTER
+            self, "Open Video File", "", _VIDEO_FILTER,
+            options=QFileDialog.Option.DontUseNativeDialog,
         )
         if path:
             self._player.load(path)
