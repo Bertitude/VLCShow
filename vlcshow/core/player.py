@@ -231,6 +231,25 @@ class VLCPlayer(QObject):
         """Return current state token (e.g. 'playing', 'paused')."""
         return _STATE_MAP.get(self._player.get_state(), "idle")
 
+    # --------------------------------------------------------------- snapshot
+
+    def take_snapshot(self, path: str, width: int = 320, height: int = 180) -> bool:
+        """Ask VLC to write a thumbnail image to *path*.
+
+        The write is asynchronous — the file may not exist immediately after
+        this call returns.  Callers should read the file on the *next* timer
+        tick (≥1 s later) to ensure it has been flushed to disk.
+
+        Returns True if VLC accepted the request, False on error or if no
+        media is loaded.
+        """
+        if self._media is None or self.get_state() not in ("playing", "paused"):
+            return False
+        try:
+            return self._player.video_take_snapshot(0, path, width, height) == 0
+        except Exception:
+            return False
+
     # --------------------------------------------------------------- internals
 
     def _poll(self) -> None:
